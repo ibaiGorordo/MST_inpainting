@@ -164,8 +164,8 @@ class WireframeDetector(nn.Module):
                                     juncs_pred[idx_lines_for_junctions[:, 1]]), dim=1)
         score_final = self.pooling(loi_features[0], lines_final).sigmoid()
 
-        # lines_final = lines_final[inverse_idx[iskeep]]
-        # score_final = score_final[inverse_idx[iskeep]]
+        lines_final = lines_final[inverse_idx[iskeep]]
+        score_final = score_final[inverse_idx[iskeep]]
 
         # lines_final = lines_adjusted[scores > 0.05]
         # score_final = scores[scores > 0.05]
