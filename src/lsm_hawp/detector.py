@@ -122,78 +122,76 @@ class WireframeDetector(nn.Module):
         return self.forward_test(images)
 
     def forward_test(self, images):
-        
-        try:
-            outputs, features = self.backbone(images)
 
-            loi_features = self.fc1(features)
-            output = outputs[0]
-            md_pred = output[:, :3].sigmoid()
-            dis_pred = output[:, 3:4].sigmoid()
-            res_pred = output[:, 4:5].sigmoid()
-            jloc_pred = output[:, 5:7].softmax(1)[:, 1:]
-            joff_pred = output[:, 7:9].sigmoid() - 0.5
+        outputs, features = self.backbone(images)
 
-            batch_size = md_pred.size(0)
-            assert batch_size == 1
+        loi_features = self.fc1(features)
+        output = outputs[0]
+        md_pred = output[:, :3].sigmoid()
+        dis_pred = output[:, 3:4].sigmoid()
+        res_pred = output[:, 4:5].sigmoid()
+        jloc_pred = output[:, 5:7].softmax(1)[:, 1:]
+        joff_pred = output[:, 7:9].sigmoid() - 0.5
 
-            if self.use_residual:
-                lines_pred = self.proposal_lines_new(md_pred[0], dis_pred[0], res_pred[0]).view(-1, 4)
-            else:
-                lines_pred = self.proposal_lines_new(md_pred[0], dis_pred[0], None).view(-1, 4)
+        batch_size = md_pred.size(0)
+        assert batch_size == 1
 
-            jloc_pred_nms = non_maximum_suppression(jloc_pred)
-            topK = min(300, int((jloc_pred_nms > 0.008).float().sum().item()))
+        if self.use_residual:
+            lines_pred = self.proposal_lines_new(md_pred[0], dis_pred[0], res_pred[0]).view(-1, 4)
+        else:
+            lines_pred = self.proposal_lines_new(md_pred[0], dis_pred[0], None).view(-1, 4)
 
-            juncs_pred, _ = get_junctions(jloc_pred_nms, joff_pred[0], topk=topK)
-            dis_junc_to_end1, idx_junc_to_end1 = torch.sum((lines_pred[:, :2] - juncs_pred[:, None]) ** 2, dim=-1).min(0)
-            dis_junc_to_end2, idx_junc_to_end2 = torch.sum((lines_pred[:, 2:] - juncs_pred[:, None]) ** 2, dim=-1).min(0)
+        jloc_pred_nms = non_maximum_suppression(jloc_pred)
+        topK = min(300, int((jloc_pred_nms > 0.008).float().sum().item()))
 
-            idx_junc_to_end_min = torch.min(idx_junc_to_end1, idx_junc_to_end2)
-            idx_junc_to_end_max = torch.max(idx_junc_to_end1, idx_junc_to_end2)
+        juncs_pred, _ = get_junctions(jloc_pred_nms, joff_pred[0], topk=topK)
+        dis_junc_to_end1, idx_junc_to_end1 = torch.sum((lines_pred[:, :2] - juncs_pred[:, None]) ** 2, dim=-1).min(0)
+        dis_junc_to_end2, idx_junc_to_end2 = torch.sum((lines_pred[:, 2:] - juncs_pred[:, None]) ** 2, dim=-1).min(0)
 
-            iskeep = (idx_junc_to_end_min < idx_junc_to_end_max)
-            # idx_lines_for_junctions: [n_line', 2] 为筛选后的line起点终点idx
-            idx_lines_for_junctions = torch.unique(torch.cat((idx_junc_to_end_min[iskeep, None],
-                                                            idx_junc_to_end_max[iskeep, None]), dim=1), dim=0)
-            # [n_line', 4]
-            lines_adjusted = torch.cat((juncs_pred[idx_lines_for_junctions[:, 0]],
-                                        juncs_pred[idx_lines_for_junctions[:, 1]]), dim=1)
-            scores = self.pooling(loi_features[0], lines_adjusted).sigmoid()
+        idx_junc_to_end_min = torch.min(idx_junc_to_end1, idx_junc_to_end2)
+        idx_junc_to_end_max = torch.max(idx_junc_to_end1, idx_junc_to_end2)
 
-            lines_final = lines_adjusted[scores > 0.05]
-            score_final = scores[scores > 0.05]
+        iskeep = (idx_junc_to_end_min < idx_junc_to_end_max)
 
-            juncs_final = juncs_pred[idx_lines_for_junctions.unique()]
-            juncs_score = _[idx_lines_for_junctions.unique()]
+        # idx_lines_for_junctions: [n_line', 2] 为筛选后的line起点终点idx
+        junc_indices = torch.cat((idx_junc_to_end_min[:, None],
+                                idx_junc_to_end_max[:, None]), dim=1)
+        idx_lines_for_junctions, inverse_idx = torch.unique(junc_indices, dim=0, return_inverse=True)
 
-            sx = 1 / output.size(3)
-            sy = 1 / output.size(2)
 
-            lines_final[:, 0] *= sx
-            lines_final[:, 1] *= sy
-            lines_final[:, 2] *= sx
-            lines_final[:, 3] *= sy
+        # [n_line', 4]
+        lines_final = torch.cat((juncs_pred[idx_lines_for_junctions[:, 0]],
+                                    juncs_pred[idx_lines_for_junctions[:, 1]]), dim=1)
+        score_final = self.pooling(loi_features[0], lines_final).sigmoid()
 
-            juncs_final[:, 0] *= sx
-            juncs_final[:, 1] *= sy
+        # lines_final = lines_final[inverse_idx[iskeep]]
+        # score_final = score_final[inverse_idx[iskeep]]
 
-            output = {
-                'lines_pred': lines_final,
-                'lines_score': score_final,
-                'juncs_pred': juncs_final,
-                'juncs_score': juncs_score,
-                'num_proposals': lines_adjusted.size(0)
-            }
+        # lines_final = lines_adjusted[scores > 0.05]
+        # score_final = scores[scores > 0.05]
 
-        except Exception:
-            output = {
-                'lines_pred': [],
-                'lines_score': [],
-                'juncs_pred': [],
-                'juncs_score': [],
-                'num_proposals': 0
-            }
+        juncs_final = juncs_pred[idx_lines_for_junctions.unique()]
+        juncs_score = _[idx_lines_for_junctions.unique()]
+
+        sx = 1 / output.size(3)
+        sy = 1 / output.size(2)
+
+        lines_final[:, 0] *= sx
+        lines_final[:, 1] *= sy
+        lines_final[:, 2] *= sx
+        lines_final[:, 3] *= sy
+
+        juncs_final[:, 0] *= sx
+        juncs_final[:, 1] *= sy
+
+        output = {
+            'lines_pred': lines_final,
+            'lines_score': score_final,
+            'juncs_pred': juncs_final,
+            'juncs_score': juncs_score,
+            'num_proposals': lines_final.size(0)
+        }
+
 
         return output
 
