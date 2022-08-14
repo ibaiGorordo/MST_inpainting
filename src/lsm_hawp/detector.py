@@ -142,10 +142,10 @@ class WireframeDetector(nn.Module):
             else:
                 lines_pred = self.proposal_lines_new(md_pred[0], dis_pred[0], None).view(-1, 4)
 
-            jloc_pred_nms = non_maximum_suppression(jloc_pred[0])
+            jloc_pred_nms = non_maximum_suppression(jloc_pred)
             topK = min(300, int((jloc_pred_nms > 0.008).float().sum().item()))
 
-            juncs_pred, _ = get_junctions(non_maximum_suppression(jloc_pred[0]), joff_pred[0], topk=topK)
+            juncs_pred, _ = get_junctions(jloc_pred_nms, joff_pred[0], topk=topK)
             dis_junc_to_end1, idx_junc_to_end1 = torch.sum((lines_pred[:, :2] - juncs_pred[:, None]) ** 2, dim=-1).min(0)
             dis_junc_to_end2, idx_junc_to_end2 = torch.sum((lines_pred[:, 2:] - juncs_pred[:, None]) ** 2, dim=-1).min(0)
 
