@@ -2,6 +2,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# Ref: https://zenn.dev/pinto0309/scraps/1fa87e6fa6f918
+class InstanceNormAlternative(nn.InstanceNorm2d):
+    def forward(self, inp: torch.Tensor) -> torch.Tensor:
+        self._check_input_dim(inp)
+        desc = 1 / (inp.var(axis=[2, 3], keepdim=True, unbiased=False) + self.eps) ** 0.5
+        retval = (inp - inp.mean(axis=[2, 3], keepdim=True)) * desc
+        return retval
 
 class BaseNetwork(nn.Module):
     def __init__(self):
@@ -106,17 +113,17 @@ class SeparableDecoder(nn.Module):
         self.decoder_conv = nn.Sequential(
             SNGateConv(in_channels=input_channels, out_channels=self.deconv_ch, kernel_size=3 if stride == 1 else 4,
                        stride=stride, padding=1, transpose=True if stride > 1 else False),
-            nn.InstanceNorm2d(self.deconv_ch, track_running_stats=False),
+            InstanceNormAlternative(self.deconv_ch, track_running_stats=False),
             nn.ReLU(True)
         )
         self.emb_head = nn.Sequential(
             nn.Conv2d(self.deconv_ch, emb_channels * 2, kernel_size=3, stride=1, padding=1),
-            nn.InstanceNorm2d(emb_channels * 2, track_running_stats=False),
+            InstanceNormAlternative(emb_channels * 2, track_running_stats=False),
             nn.ReLU(True)
         )
         self.att_head = nn.Sequential(
             nn.Conv2d(emb_channels * 2, emb_channels, kernel_size=3, stride=1, padding=1),
-            nn.InstanceNorm2d(emb_channels, track_running_stats=False),
+            InstanceNormAlternative(emb_channels, track_running_stats=False),
             nn.ReLU(True),
             nn.Conv2d(in_channels=emb_channels, out_channels=1, kernel_size=3, stride=1, padding=1),
             nn.Sigmoid()
@@ -229,13 +236,13 @@ class ResnetBlock(nn.Module):
             nn.ReflectionPad2d(dilation),
             spectral_norm(nn.Conv2d(in_channels=dim, out_channels=dim, kernel_size=3, padding=0, dilation=dilation,
                                     bias=not use_spectral_norm), use_spectral_norm),
-            nn.InstanceNorm2d(dim, track_running_stats=False),
+            InstanceNormAlternative(dim, track_running_stats=False),
             nn.ReLU(True),
 
             nn.ReflectionPad2d(1),
             spectral_norm(nn.Conv2d(in_channels=dim, out_channels=dim, kernel_size=3, padding=0, dilation=1,
                                     bias=not use_spectral_norm), use_spectral_norm),
-            nn.InstanceNorm2d(dim, track_running_stats=False),
+            InstanceNormAlternative(dim, track_running_stats=False),
         )
 
     def forward(self, x):

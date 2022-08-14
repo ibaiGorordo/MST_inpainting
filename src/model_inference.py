@@ -16,6 +16,7 @@ from utils.utils import create_dir, stitch_images, to_device, to_tensor
 from utils.utils import torch_show_all_params
 
 
+
 class BaseModel(nn.Module):
     def __init__(self, name, config):
         super(BaseModel, self).__init__()
@@ -83,15 +84,15 @@ class InpaintGateGenerator(BaseNetwork):
         self.encoder = nn.Sequential(
             nn.ReflectionPad2d(3),
             GateConv(in_channels=input_channel, out_channels=64, kernel_size=7, padding=0),
-            nn.InstanceNorm2d(64, track_running_stats=False),
+            InstanceNormAlternative(64, track_running_stats=False),
             nn.ReLU(True),
 
             GateConv(in_channels=64, out_channels=128, kernel_size=4, stride=2, padding=1),
-            nn.InstanceNorm2d(128, track_running_stats=False),
+            InstanceNormAlternative(128, track_running_stats=False),
             nn.ReLU(True),
 
             GateConv(in_channels=128, out_channels=256, kernel_size=4, stride=2, padding=1),
-            nn.InstanceNorm2d(256, track_running_stats=False),
+            InstanceNormAlternative(256, track_running_stats=False),
             nn.ReLU(True)
         )
 
@@ -104,11 +105,11 @@ class InpaintGateGenerator(BaseNetwork):
 
         self.decoder = nn.Sequential(
             GateConv(in_channels=256, out_channels=128, kernel_size=4, stride=2, padding=1, transpose=True),
-            nn.InstanceNorm2d(128, track_running_stats=False),
+            InstanceNormAlternative(128, track_running_stats=False),
             nn.ReLU(True),
 
             GateConv(in_channels=128, out_channels=64, kernel_size=4, stride=2, padding=1, transpose=True),
-            nn.InstanceNorm2d(64, track_running_stats=False),
+            InstanceNormAlternative(64, track_running_stats=False),
             nn.ReLU(True),
 
             nn.ReflectionPad2d(3),
@@ -140,15 +141,15 @@ class SWEGenerator(BaseNetwork):
         self.encoder = nn.Sequential(
             nn.ReflectionPad2d(3),
             SNGateConv(in_channels=input_channel, out_channels=ch, kernel_size=7, padding=0),
-            nn.InstanceNorm2d(ch, track_running_stats=False),
+            InstanceNormAlternative(ch, track_running_stats=False),
             nn.ReLU(True),
 
             SNGateConv(in_channels=ch, out_channels=ch * 2, kernel_size=4, stride=2, padding=1),
-            nn.InstanceNorm2d(ch * 2, track_running_stats=False),
+            InstanceNormAlternative(ch * 2, track_running_stats=False),
             nn.ReLU(True),
 
             SNGateConv(in_channels=ch * 2, out_channels=ch * 4, kernel_size=4, stride=2, padding=1),
-            nn.InstanceNorm2d(ch * 4, track_running_stats=False),
+            InstanceNormAlternative(ch * 4, track_running_stats=False),
             nn.ReLU(True)
         )
 
@@ -256,7 +257,7 @@ def resize(img, height, width, centerCrop=False):
     return img
 
 
-def load_image(path, img_size, hawp_size):
+def load_image(path, mask, img_size, hawp_size):
     img = cv2.imread(path)[:, :, ::-1]
     origin_shape = img.shape
     origin_img = img.copy()
@@ -264,6 +265,7 @@ def load_image(path, img_size, hawp_size):
         img = gray2rgb(img)
     hawp_img = resize(img, hawp_size, hawp_size)
     img = resize(img, img_size, img_size, centerCrop=False)
+    img[mask==1] = 255
     img_gray = rgb2gray(img)
     edge = canny(img_gray, sigma=2).astype(np.float)
 
@@ -374,10 +376,11 @@ class MST:
         return lines_tensor.detach().to(self.config.DEVICE)
 
     def inference(self, path, mask_path, valid_th, mask_th, output_path=None, not_obj_remove=False):
-        items = load_image(path, self.img_size, self.hawp_size)
+
         mask = cv2.imread(mask_path)
         mask = cv2.resize(mask, (self.img_size, self.img_size), interpolation=cv2.INTER_NEAREST)[:, :, 0]
         mask = mask / 255
+        items = load_image(path, mask, self.img_size, self.hawp_size)
         items['masks'] = torchvision.transforms.functional.to_tensor(mask.astype(np.float32))
         for k in items:
             if type(items[k]) == torch.Tensor:
@@ -390,8 +393,14 @@ class MST:
         inputs = (items['img'] * (1 - items['masks'])) + items['masks']
         hawp_lines = self.hawp_inference_test(items['hawp_img'], items['masks'],
                                               obj_remove=not not_obj_remove, valid_th=valid_th, mask_th=mask_th)
+
         meta_outputs = self.structure_encoder(items['img'], hawp_lines, items['edges'], items['masks'])
         edge_out = meta_outputs['edge_out'][-1]
+
+        outputs_merged = edge_out * 255.0
+        outputs_merged = outputs_merged.permute(0, 2, 3, 1).int()
+        outputs_merged = outputs_merged.cpu().detach().numpy().squeeze().astype(np.uint8)
+
         line_out = meta_outputs['line_out'][-1]
         lines_edges_pred = torch.clamp(line_out + edge_out, 0, 1)
         lines_preds = torch.clamp(hawp_lines + line_out, 0, 1)
